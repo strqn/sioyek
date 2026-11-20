@@ -38,15 +38,19 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # GitHub's ubuntu runners already include the Android SDK
+      # (ANDROID_HOME) and sdkmanager, so no setup action is needed.
       - name: Install SDK platform, build-tools and NDK
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;${ANDROID_PLATFORM}" \
-                     "build-tools;${ANDROID_BUILD_TOOLS}" \
-                     "ndk;${NDK_VERSION}"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          echo "Using SDK at $SDK, sdkmanager at $SDKMANAGER"
+          yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$SDK" \
+            "platforms;${ANDROID_PLATFORM}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            "ndk;${NDK_VERSION}"
 
       - name: Install Qt (desktop host tools)
         uses: jurplel/install-qt-action@v4
