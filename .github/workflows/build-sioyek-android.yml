@@ -1,145 +1,145 @@
-# Builds an arm64-v8a Android APK of Sioyek (development branch).
-# Target device: Xiaomi Pad 6S Pro (Snapdragon, arm64, Android 14 / HyperOS).
-#
-# Put this file in your fork at:  .github/workflows/build-sioyek-android.yml
-# Then: Actions tab -> "Build Sioyek Android APK" -> Run workflow.
-#
-# NOTE: written from the repo's build files; not tested end-to-end.
-
-name: Build Sioyek Android APK
+name: Build Android APK
 
 on:
+  push:
+    branches:
+      - "*"
+    tags:
+      - "v*"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 defaults:
   run:
     shell: bash
 
 jobs:
-  build-apk:
+  build-android-apk:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
     env:
       QT_VERSION: 6.7.3
-      ABI: arm64-v8a
+      QT_HOST_ARCH: gcc_64
+      QT_TARGET_ARCH: android_arm64_v8a
+      QT_ANDROID_MODULES:
+      ANDROID_ABI: arm64-v8a
       ANDROID_PLATFORM: android-34
       ANDROID_BUILD_TOOLS: 34.0.0
-      NDK_VERSION: 26.1.10909125
+      ANDROID_NDK_VERSION: 26.1.10909125
 
     steps:
-      - name: Checkout (with mupdf + zlib submodules)
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # GitHub's ubuntu runners already include the Android SDK
-      # (ANDROID_HOME) and sdkmanager, so no setup action is needed.
-      - name: Install SDK platform, build-tools and NDK
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
         run: |
-          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
-          echo "Using SDK at $SDK, sdkmanager at $SDKMANAGER"
-          yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses >/dev/null || true
-          "$SDKMANAGER" --sdk_root="$SDK" \
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
             "platforms;${ANDROID_PLATFORM}" \
             "build-tools;${ANDROID_BUILD_TOOLS}" \
-            "ndk;${NDK_VERSION}"
-
-      - name: Install Qt (desktop host tools)
+            "ndk;${ANDROID_NDK_VERSION}"
+      - name: Install Qt host tools
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
           host: linux
           target: desktop
-          arch: linux_gcc_64
           dir: ${{ runner.temp }}/qt
           cache: true
+          setup-python: true
 
-      - name: Install Qt (Android arm64 target + Speech module)
+      - name: Install Qt Android target
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
           host: linux
           target: android
-          arch: android_arm64_v8a
-          modules: qtspeech
+          arch: ${{ env.QT_TARGET_ARCH }}
           dir: ${{ runner.temp }}/qt
           cache: true
+          setup-python: true
 
-      - name: Resolve tool paths
+      - name: Resolve Qt and Android paths
         run: |
-          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
-          QT_HOST_DIR="$(dirname "$(dirname "$(find "$RUNNER_TEMP/qt" -path "*/${QT_VERSION}/gcc_64/bin/qmake" | head -1)")")"
-          QT_TARGET_DIR="$(dirname "$(dirname "$(find "$RUNNER_TEMP/qt" -path "*/${QT_VERSION}/android_arm64_v8a/bin/qmake" | head -1)")")"
-          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_ROOT=$SDK/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$SDK/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
-          echo "QT_HOST_DIR=$QT_HOST_DIR" >> "$GITHUB_ENV"
-          echo "QT_TARGET_DIR=$QT_TARGET_DIR" >> "$GITHUB_ENV"
-          echo "Qt host:   $QT_HOST_DIR"
-          echo "Qt target: $QT_TARGET_DIR"
-          test -x "$QT_HOST_DIR/bin/androiddeployqt"
-          test -x "$QT_TARGET_DIR/bin/qmake"
-
-      # Sioyek links against libs/libmupdf_java.so, which must contain the whole
-      # MuPDF core. By default the JNI lib only pulls in the symbols the Java
-      # wrapper uses, so we link the static libs with --whole-archive.
-      - name: Build MuPDF for Android (libmupdf_java.so)
-        working-directory: mupdf
+          echo "QT_ROOT=${RUNNER_TEMP}/qt/Qt/${QT_VERSION}" >> "$GITHUB_ENV"
+          echo "QT_HOST_DIR=${RUNNER_TEMP}/qt/Qt/${QT_VERSION}/${QT_HOST_ARCH}" >> "$GITHUB_ENV"
+          echo "QT_TARGET_DIR=${RUNNER_TEMP}/qt/Qt/${QT_VERSION}/${QT_TARGET_ARCH}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+      - name: Regenerate Android deployment settings
         run: |
-          sed -i 's/^LOCAL_STATIC_LIBRARIES +=/LOCAL_WHOLE_STATIC_LIBRARIES +=/' platform/java/Android.mk
-          "$ANDROID_NDK_ROOT/ndk-build" -j"$(nproc)" \
-            APP_BUILD_SCRIPT=platform/java/Android.mk \
-            APP_PROJECT_PATH=build/android \
-            APP_PLATFORM=android-23 \
-            APP_OPTIM=release \
-            APP_ABI="$ABI"
-          mkdir -p "$GITHUB_WORKSPACE/libs"
-          cp "build/android/libs/$ABI/libmupdf_java.so" "$GITHUB_WORKSPACE/libs/"
-          ls -lh "$GITHUB_WORKSPACE/libs"
-
-      - name: Fetch OpenSSL 3 libs for Android
+          export PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$QT_HOST_DIR/bin:$PATH"
+          "$QT_HOST_DIR/bin/qmake6" \
+            -o Makefile \
+            pdf_viewer_build_config.pro \
+            -qtconf "$QT_TARGET_DIR/bin/target_qt.conf" \
+            -spec android-clang \
+            CONFIG+=release \
+            ANDROID_ABIS="$ANDROID_ABI"
+      - name: Build native library
         run: |
-          for f in libssl_3.so libcrypto_3.so; do
-            curl -fL -o "libs/$f" \
-              "https://raw.githubusercontent.com/KDAB/android_openssl/master/ssl_3/${ABI}/$f"
-          done
-          ls -lh libs
-
-      - name: Configure (qmake)
+          export PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$QT_HOST_DIR/bin:$PATH"
+          make -j"$(nproc)"
+      - name: Stage rebuilt native library
         run: |
-          mkdir build-android && cd build-android
-          "$QT_TARGET_DIR/bin/qmake" ../pdf_viewer_build_config.pro \
-            CONFIG+=release ANDROID_ABIS="$ABI"
-
-      - name: Compile native library
-        working-directory: build-android
-        run: make -j"$(nproc)"
-
-      - name: Package APK
-        working-directory: build-android
+          mkdir -p "android-build/libs/${ANDROID_ABI}"
+          cp "libsioyek_${ANDROID_ABI}.so" "android-build/libs/${ANDROID_ABI}/libsioyek_${ANDROID_ABI}.so"
+      - name: Prepare Gradle Java home
         run: |
-          make install INSTALL_ROOT="$PWD/android-build"
-          chmod +x ../android/gradlew || true
+          python - <<PY
+          import os
+          from pathlib import Path
+          path = Path('android/gradle.properties')
+          java_home = os.environ['JAVA_HOME']
+          lines = path.read_text().splitlines()
+          updated = []
+          replaced = False
+          for line in lines:
+              if line.startswith('org.gradle.java.home='):
+                  updated.append('org.gradle.java.home=' + java_home)
+                  replaced = True
+              else:
+                  updated.append(line)
+          if not replaced:
+              updated.append('org.gradle.java.home=' + java_home)
+          path.write_text('\n'.join(updated) + '\n')
+          PY
+      - name: Package debug APK
+        run: |
+          chmod +x android/gradlew
           "$QT_HOST_DIR/bin/androiddeployqt" \
             --input android-sioyek-deployment-settings.json \
             --output android-build \
             --android-platform "$ANDROID_PLATFORM" \
-            --gradle
-          find android-build/build/outputs -name '*.apk' -print
+            --apk \
+            --gradle \
+            --debug
+      - name: Show APK output
+        run: find android-build/build/outputs -name '*.apk' -print
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sioyek-android-arm64-apk
-          path: build-android/android-build/build/outputs/apk/**/*.apk
+          name: sioyek-android-apk
+          path: android-build/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          retention-days: 90
+
+      - name: Publish APK to GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android-build/build/outputs/apk/debug/*.apk
